@@ -22,12 +22,16 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl) only in dev
-      if (!origin && process.env.NODE_ENV !== "production") return callback(null, true);
+      // Allow requests with no Origin header:
+      // - UptimeRobot / health check pings
+      // - Server-side fetches (no browser origin)
+      // - curl / Postman during testing
+      // Browser requests always send an Origin, so this doesn't weaken security.
+      if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       callback(new Error(`CORS: origin ${origin} not allowed`));
     },
-    methods: ["POST"],
+    methods: ["GET", "POST"],   // GET needed for /health preflight
     optionsSuccessStatus: 200,
   })
 );
