@@ -251,24 +251,42 @@ function ContactForm() {
   const handleChange = (e) => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setStatus("sending");
-    setErrorMsg("");
+  e.preventDefault();
+  setStatus("sending");
+  setErrorMsg("");
+
+  const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+  try {
+    // Wake the server up first, retry until alive (max 30s)
+    await wakeServer(API);
+
+    const res = await fetch(`${API}/api/contact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Something went wrong");
+    setStatus("success");
+    setForm({ name: "", email: "", subject: "", message: "" });
+  } catch (err) {
+    setStatus("error");
+    setErrorMsg(err.message);
+  }
+};
+
+async function wakeServer(apiUrl, maxWaitMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:5000"}/api/contact`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "Something went wrong");
-      setStatus("success");
-      setForm({ name: "", email: "", subject: "", message: "" });
-    } catch (err) {
-      setStatus("error");
-      setErrorMsg(err.message);
-    }
-  };
+      const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) return; // server is awake
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 2000)); // wait 2s, retry
+  }
+  throw new Error("Server is taking too long to wake up. Please try again.");
+}
 
   const inputStyle = {
     background: "var(--card)", border: "1px solid var(--border)", borderRadius: 6,
