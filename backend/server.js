@@ -10,35 +10,29 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ── Security middleware ──────────────────────────────────────────────────────
-
 app.use(helmet());
 app.use(express.json({ limit: "10kb" }));
 
-// ── /health — BEFORE cors so any origin can reach it ────────────────────────
+// /health before CORS so any origin can reach it
 app.get("/health", (_req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.json({ status: "ok" });
 });
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173")
   .split(",")
   .map((o) => o.trim());
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      callback(new Error(`CORS: origin ${origin} not allowed`));
-    },
-    methods: ["GET", "POST"],
-    optionsSuccessStatus: 200,
-  })
-);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  methods: ["GET", "POST"],
+  optionsSuccessStatus: 200,
+}));
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -47,9 +41,7 @@ const contactLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// ── Mailgun — lazy init ───────────────────────────────────────────────────────
 let mgClient = null;
-
 function getMailgun() {
   if (mgClient) return mgClient;
   if (!process.env.MAILGUN_API_KEY) throw new Error("MAILGUN_API_KEY is not set.");
@@ -58,22 +50,20 @@ function getMailgun() {
   mgClient = mailgun.client({
     username: "api",
     key: process.env.MAILGUN_API_KEY,
-    // EU accounts: uncomment the line below
+    // EU accounts: uncomment below
     // url: "https://api.eu.mailgun.net",
   });
   return mgClient;
 }
 
-// ── Routes ────────────────────────────────────────────────────────────────────
-
 app.post(
   "/api/contact",
   contactLimiter,
   [
-    body("name").trim().notEmpty().withMessage("Name is required").isLength({ max: 100 }).withMessage("Name too long"),
+    body("name").trim().notEmpty().withMessage("Name is required").isLength({ max: 100 }),
     body("email").trim().isEmail().withMessage("Valid email is required").normalizeEmail(),
-    body("subject").trim().optional().isLength({ max: 200 }).withMessage("Subject too long"),
-    body("message").trim().notEmpty().withMessage("Message is required").isLength({ min: 10, max: 2000 }).withMessage("Message must be 10-2000 characters"),
+    body("subject").trim().optional().isLength({ max: 200 }),
+    body("message").trim().notEmpty().withMessage("Message is required").isLength({ min: 10, max: 2000 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -87,14 +77,13 @@ app.post(
     const EMAIL_TO = process.env.EMAIL_TO;
 
     if (!EMAIL_TO) {
-      console.error("EMAIL_TO not set");
       return res.status(500).json({ success: false, message: "Server misconfiguration. Please email directly." });
     }
 
     try {
       const mg = getMailgun();
 
-      // Notification email to you
+      // ── Primary: notification to you — MUST succeed ──────────────────────
       await mg.messages.create(DOMAIN, {
         from: FROM,
         to: EMAIL_TO,
@@ -115,26 +104,35 @@ app.post(
         `,
       });
 
-      // Auto-reply to sender
-      await mg.messages.create(DOMAIN, {
-        from: `Masroor Shah <noreply@${DOMAIN}>`,
-        to: email,
-        subject: "Thanks for reaching out!",
-        html: `
-          <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#0a0a0f;color:#e8e8f0;border-radius:8px">
-            <h2 style="color:#7effd4;margin-bottom:16px">Hey ${escapeHtml(name)}!</h2>
-            <p style="line-height:1.8;color:#a0a0b8">Thanks for getting in touch. I received your message and will get back to you as soon as possible - usually within 24-48 hours.</p>
-            <p style="line-height:1.8;color:#a0a0b8;margin-top:16px">In the meantime, feel free to check out my GitHub or LinkedIn.</p>
-            <div style="margin-top:32px;padding-top:24px;border-top:1px solid #1e1e2e;font-size:12px;color:#6b6b8a">
-              Masroor Shah - Schmalkalden, DE<br/>
-              <a href="https://github.com/masroor07" style="color:#7effd4">GitHub</a> -
-              <a href="https://linkedin.com/in/masroorshah" style="color:#7effd4">LinkedIn</a>
+      // ── Secondary: auto-reply to sender — best-effort only ───────────────
+      // Sandbox domains can only send to authorised recipients, so this will
+      // fail for unknown senders. We catch it silently so the user still gets
+      // a 200 success. Once you add a custom domain this works for everyone.
+      try {
+        await mg.messages.create(DOMAIN, {
+          from: `Masroor Shah <noreply@${DOMAIN}>`,
+          to: email,
+          subject: "Thanks for reaching out!",
+          html: `
+            <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#0a0a0f;color:#e8e8f0;border-radius:8px">
+              <h2 style="color:#7effd4;margin-bottom:16px">Hey ${escapeHtml(name)}!</h2>
+              <p style="line-height:1.8;color:#a0a0b8">Thanks for getting in touch. I received your message and will get back to you as soon as possible - usually within 24-48 hours.</p>
+              <p style="line-height:1.8;color:#a0a0b8;margin-top:16px">In the meantime, feel free to check out my GitHub or LinkedIn.</p>
+              <div style="margin-top:32px;padding-top:24px;border-top:1px solid #1e1e2e;font-size:12px;color:#6b6b8a">
+                Masroor Shah - Schmalkalden, DE<br/>
+                <a href="https://github.com/masroor07" style="color:#7effd4">GitHub</a> -
+                <a href="https://linkedin.com/in/masroorshah" style="color:#7effd4">LinkedIn</a>
+              </div>
             </div>
-          </div>
-        `,
-      });
+          `,
+        });
+      } catch (autoReplyErr) {
+        // Sandbox restriction or unverified recipient — log but don't fail
+        console.warn("Auto-reply skipped (sandbox restriction):", autoReplyErr?.details || autoReplyErr?.message);
+      }
 
       res.json({ success: true, message: "Message sent successfully!" });
+
     } catch (err) {
       const detail = err?.details || err?.message || "Unknown error";
       console.error("Mailgun error:", detail);
@@ -143,18 +141,11 @@ app.post(
   }
 );
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function escapeHtml(str) {
   return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 }
-
-// ── Start ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
